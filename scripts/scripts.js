@@ -11,6 +11,58 @@ import {
   loadCSS,
   buildBlock,
 } from './aem.js';
+import { configureTracking, setPageAttributes } from './tracking.js';
+/* eslint-disable import/no-relative-packages */
+import {
+  initMartech,
+  martechDelayed,
+  martechEager,
+  martechLazy,
+  pushEventToDataLayer,
+  updateUserConsent,
+} from '../plugins/martech/src/index.js';
+/* eslint-enable import/no-relative-packages */
+
+function sendClickToAdobe(event) {
+  if (event.event !== 'click') return;
+  pushEventToDataLayer(
+    'eds:track',
+    {
+      eventType: 'web.webinteraction.linkClicks',
+      web: {
+        webInteraction: {
+          name: event.label || event.id,
+          type: 'other',
+          ...(event.href && { URL: event.href }),
+          linkClicks: { value: 1 },
+        },
+      },
+    },
+    { eds: { tracking: event } },
+  );
+}
+
+function applyConsent({ detail }) {
+  return updateUserConsent({
+    collect: detail.consented,
+    marketing: false,
+    personalize: false,
+    share: false,
+  });
+}
+
+function getPageAttributes() {
+  const canonical = document.querySelector('link[rel="canonical"]')?.href;
+  const { origin, pathname } = window.location;
+  let viewport = 'desktop';
+  if (window.innerWidth < 768) viewport = 'mobile';
+  else if (window.innerWidth < 1200) viewport = 'tablet';
+  return {
+    language: document.documentElement.lang,
+    url: canonical || `${origin}${pathname}`,
+    viewport,
+  };
+}
 
 if (window.trustedTypes && window.trustedTypes.createPolicy) {
   const innerTT = window.trustedTypes.createPolicy('tt-inner', {
@@ -160,7 +212,18 @@ export function decorateMain(main) {
  * @param {Element} doc The container element
  */
 async function loadEager(doc) {
-  document.documentElement.lang = 'en';
+  document.documentElement.lang ||= 'en';
+  initMartech({
+    datastreamId: 'cc68fdd3-4db1-432c-adce-288917ddf108',
+    orgId: '908936ED5D35CC220A495CD4@AdobeOrg',
+    clickCollectionEnabled: false,
+    defaultConsent: 'pending',
+  }, { personalization: false })
+    .then(() => martechEager())
+    .catch(() => undefined);
+  window.addEventListener('consent.update', applyConsent);
+  configureTracking({ onTrack: sendClickToAdobe });
+  setPageAttributes(getPageAttributes());
   decorateTemplateAndTheme();
   const main = doc.querySelector('main');
   if (main) {
@@ -187,6 +250,7 @@ async function loadLazy(doc) {
   loadHeader(doc.querySelector('body > header'));
 
   const main = doc.querySelector('main');
+  martechLazy().catch(() => undefined);
   await loadSections(main);
 
   const { hash } = window.location;
@@ -205,6 +269,7 @@ async function loadLazy(doc) {
  */
 function loadDelayed() {
   import('./consent-check.js');
+  martechDelayed();
   // load anything that can be postponed to the latest here
 }
 
