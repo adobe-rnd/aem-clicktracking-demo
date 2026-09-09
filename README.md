@@ -45,6 +45,10 @@ or you will report each interaction twice.
 > `updateUserConsent` (Alloy holds events until `consent.update` grants
 > `collect`), but any listener you attach to `eds:track` receives events
 > immediately, so a listener that forwards data must apply its own consent check.
+> Auto-capture widens this surface: the tracker now emits a `click` for
+> every interactive click — not only `trackAs`-annotated controls — so it
+> reaches the same unconditional `eds:track` path, and that consumer-side
+> consent check must cover them all.
 
 Wiring happens once, during eager load (`loadEager` in `scripts/scripts.js`):
 
@@ -65,12 +69,32 @@ Wiring happens once, during eager load (`loadEager` in `scripts/scripts.js`):
 two producers (`trackAs`, `track`); the project wires the two setup calls
 (`configureTracking`, `setPageAttributes`) once.
 
+### Automatic click tracking
+
+Clicks on **interactive elements** are tracked automatically — you do **not** need
+to `trackAs` every link and button. The auto-captured set is `a[href]`, `button`,
+`input[type=button|submit|reset]`, `summary`, and any element with an interactive
+ARIA `role` (`button` / `link` / `tab` / `checkbox` / `radio` / `switch` /
+`option` / `menuitem`). Each auto click emits the same envelope, fully derived
+from the DOM.
+
+- **Opt out** a control or a whole subtree with the `data-track="off"` attribute
+  (checked on the target and its ancestors) — nothing is emitted for clicks inside
+  it. This is the tracker's only markup contract.
+- **`trackAs` still wins.** An explicit annotation anywhere in the click path
+  overrides auto-derivation.
+- **Auto clicks have no stable key.** Without an annotation there is no authored
+  `id`, so the reference Adobe adapter keys the interaction on the (mutable)
+  label. Annotate the controls you care about with `trackAs(el, { id })` to report
+  them under a stable key.
+
 ### `trackAs(element, annotation)` — annotate a clickable element
 
-Mark an element so that clicking it emits a `click` event. The annotation is stored
-privately (in a `WeakMap`, never written to the DOM) and resolved into the full
-envelope at click time. Give it an `id`; everything else is optional and only
-*overrides* what the tracker would otherwise derive from the DOM.
+Annotate an element to override the auto-derived envelope — most importantly to
+pin a stable `id` — or to track a non-interactive element that auto-capture skips.
+The annotation is stored privately (in a `WeakMap`, never written to the DOM) and
+resolved into the full envelope at click time. Give it an `id`; everything else is
+optional and only *overrides* what the tracker would otherwise derive from the DOM.
 
 | Field | Meaning |
 |---|---|

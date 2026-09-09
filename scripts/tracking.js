@@ -1,6 +1,7 @@
 const annotations = new WeakMap();
 const page = {};
 const contextFields = ['block', 'blockSlug', 'blockStyles', 'section', 'sectionStyles'];
+const interactiveRoles = /^(button|link|tab|checkbox|radio|switch|option|menuitem)$/;
 let onTrack;
 let listening = false;
 let owner;
@@ -101,8 +102,7 @@ function clickEvent(element, annotation) {
     event: 'click',
     id: annotation.id,
     label: sanitize(label),
-    type: annotation.type ?? (/^(button|link|tab|checkbox|radio|switch|option|menuitem)$/.test(role)
-      ? role : ({ a: 'link' }[tag] ?? tag)),
+    type: annotation.type ?? (interactiveRoles.test(role) ? role : ({ a: 'link' }[tag] ?? tag)),
     ...(href && { href }),
     context: elementContext(element, annotation),
     page: { ...page },
@@ -126,9 +126,28 @@ function deliver(payload) {
   }
 }
 
+// Auto-capture predicate: a click on a natively or ARIA-interactive element is
+// tracked even without a trackAs annotation. Reads tagName/attributes directly
+// (no element.matches) so it works on real elements and plain test mocks alike.
+function isInteractive(node) {
+  const tag = node.tagName?.toLowerCase();
+  return (tag === 'a' && node.getAttribute?.('href') != null)
+    || tag === 'button'
+    || tag === 'summary'
+    || (tag === 'input' && /^(button|submit|reset)$/.test(node.getAttribute?.('type')))
+    || interactiveRoles.test(node.getAttribute?.('role'));
+}
+
 function handleClick(event) {
-  const element = event.composedPath().find((node) => annotations.has(node));
-  if (element) deliver(clickEvent(element, annotations.get(element)));
+  const path = event.composedPath();
+  // Opt-out: data-track="off" on the target or any ancestor silences the click.
+  if (path.some((node) => node.getAttribute?.('data-track') === 'off')) return;
+  // Explicit annotation anywhere in the path wins over auto-derivation; otherwise
+  // derive from the innermost interactive element. An auto-click has no
+  // annotation, so its id is absent and every field derives from the DOM.
+  const annotated = path.find((node) => annotations.has(node));
+  const element = annotated ?? path.find(isInteractive);
+  if (element) deliver(clickEvent(element, annotated ? annotations.get(element) : {}));
 }
 
 export function configureTracking(options = {}) {

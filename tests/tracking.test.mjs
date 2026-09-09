@@ -613,4 +613,166 @@ test('the eds:track DOM path is documented and marked as not consent-gated', asy
   assert.match(readme, /not consent-gated/i);
   assert.match(readme, /regardless of consent/i);
   assert.match(readme, /enforc\w+ consent[\s\S]{0,80}consumer|consent[\s\S]{0,40}consumer.{0,40}adapter.{0,40}responsib/i);
+  // The warning notes that auto-capture widens the unconditional surface from
+  // annotated controls to every interactive click.
+  assert.match(readme, /auto-captur\w+/i);
+  assert.match(readme, /every interactive click[\s\S]{0,200}(unconditional|eds:track)/i);
+});
+
+test('auto-captures a click on an interactive element with no annotation', async () => {
+  const document = new FakeDocument();
+  globalThis.document = document;
+  globalThis.CustomEvent = FakeCustomEvent;
+  const { configureTracking } = await loadTracking();
+  const events = [];
+  configureTracking({ onTrack: (event) => events.push(event) });
+
+  // An un-annotated anchor derives its whole envelope from the DOM: no authored
+  // id, label from visible text, type from the tag, href resolved absolute.
+  const link = {
+    tagName: 'A',
+    textContent: '  Learn   more ',
+    href: 'https://example.com/learn',
+    getAttribute: (name) => (name === 'href' ? '/learn' : null),
+    querySelectorAll: () => [],
+    closest: () => null,
+  };
+  document.click([link]);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].id, undefined);
+  assert.deepEqual(
+    {
+      event: events[0].event,
+      label: events[0].label,
+      type: events[0].type,
+      href: events[0].href,
+      context: events[0].context,
+    },
+    {
+      event: 'click', label: 'Learn more', type: 'link', href: 'https://example.com/learn', context: {},
+    },
+  );
+
+  // Every member of the defined interactive selector set auto-captures one click.
+  const interactive = [
+    { tagName: 'BUTTON', getAttribute: () => null },
+    { tagName: 'SUMMARY', getAttribute: () => null },
+    { tagName: 'INPUT', getAttribute: (name) => (name === 'type' ? 'submit' : null) },
+    { tagName: 'INPUT', getAttribute: (name) => (name === 'type' ? 'button' : null) },
+    { tagName: 'INPUT', getAttribute: (name) => (name === 'type' ? 'reset' : null) },
+    { tagName: 'DIV', getAttribute: (name) => (name === 'role' ? 'button' : null) },
+    { tagName: 'DIV', getAttribute: (name) => (name === 'role' ? 'link' : null) },
+    { tagName: 'DIV', getAttribute: (name) => (name === 'role' ? 'tab' : null) },
+    { tagName: 'DIV', getAttribute: (name) => (name === 'role' ? 'checkbox' : null) },
+    { tagName: 'DIV', getAttribute: (name) => (name === 'role' ? 'radio' : null) },
+    { tagName: 'DIV', getAttribute: (name) => (name === 'role' ? 'switch' : null) },
+    { tagName: 'DIV', getAttribute: (name) => (name === 'role' ? 'option' : null) },
+    { tagName: 'SPAN', getAttribute: (name) => (name === 'role' ? 'menuitem' : null) },
+  ].map((node) => ({
+    textContent: 'Go', querySelectorAll: () => [], closest: () => null, ...node,
+  }));
+  interactive.forEach((node) => {
+    const before = events.length;
+    document.click([node]);
+    // Per-member assertion localizes a regression to the failing selector.
+    const what = node.getAttribute('role') || node.getAttribute('type') || node.tagName;
+    assert.equal(events.length, before + 1, `interactive "${what}" did not auto-capture one click`);
+  });
+});
+
+test('an explicit annotation in the path wins over a nearer interactive element', async () => {
+  const document = new FakeDocument();
+  globalThis.document = document;
+  globalThis.CustomEvent = FakeCustomEvent;
+  const { configureTracking, trackAs } = await loadTracking();
+  const events = [];
+  configureTracking({ onTrack: (event) => events.push(event) });
+
+  // The innermost node is an un-annotated interactive button; an annotated
+  // ancestor wraps it. Annotation must win over auto-derivation, and only one
+  // event fires (the button does not also auto-capture).
+  const button = {
+    tagName: 'BUTTON', textContent: 'Inner', getAttribute: () => null, querySelectorAll: () => [], closest: () => null,
+  };
+  const promo = {
+    tagName: 'DIV', textContent: 'Wrapper', getAttribute: () => null, querySelectorAll: () => [], closest: () => null,
+  };
+  trackAs(promo, { id: 'promo|cta', label: 'Promo CTA', type: 'button' });
+  document.click([button, promo]);
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].id, 'promo|cta');
+  assert.equal(events[0].label, 'Promo CTA');
+  // Resolved from the annotated ancestor, never the nearer button.
+  assert.notEqual(events[0].label, 'Inner');
+});
+
+test('data-track="off" on the target or an ancestor emits nothing', async () => {
+  const document = new FakeDocument();
+  globalThis.document = document;
+  globalThis.CustomEvent = FakeCustomEvent;
+  const { configureTracking, trackAs } = await loadTracking();
+  const events = [];
+  configureTracking({ onTrack: (event) => events.push(event) });
+
+  // Self opt-out: an interactive anchor marked data-track="off" is silent.
+  const silenced = {
+    tagName: 'A',
+    textContent: 'Muted',
+    href: 'https://example.com/x',
+    getAttribute: (name) => ({ 'data-track': 'off', href: '/x' }[name] ?? null),
+    querySelectorAll: () => [],
+    closest: () => null,
+  };
+  document.click([silenced]);
+  assert.equal(events.length, 0);
+
+  // Ancestor opt-out: an interactive anchor inside an opted-out container.
+  const link = {
+    tagName: 'A',
+    textContent: 'Learn',
+    href: 'https://example.com/learn',
+    getAttribute: (name) => (name === 'href' ? '/learn' : null),
+    querySelectorAll: () => [],
+    closest: () => null,
+  };
+  const container = {
+    tagName: 'SECTION', getAttribute: (name) => (name === 'data-track' ? 'off' : null),
+  };
+  document.click([link, container]);
+  assert.equal(events.length, 0);
+
+  // An ancestor opt-out silences even an explicitly annotated target.
+  trackAs(link, { id: 'learn|more' });
+  document.click([link, container]);
+  assert.equal(events.length, 0);
+});
+
+test('a click with no interactive or annotated node emits nothing', async () => {
+  const document = new FakeDocument();
+  globalThis.document = document;
+  globalThis.CustomEvent = FakeCustomEvent;
+  const { configureTracking } = await loadTracking();
+  const events = [];
+  configureTracking({ onTrack: (event) => events.push(event) });
+
+  // Plain text inside a layout container: nothing interactive, nothing annotated.
+  const text = { tagName: 'SPAN', textContent: 'Just text', getAttribute: () => null };
+  const container = { tagName: 'DIV', getAttribute: () => null, closest: () => null };
+  document.click([text, container]);
+  assert.equal(events.length, 0);
+
+  // An anchor with no href attribute is not interactive (the set is a[href], not a).
+  const bareAnchor = {
+    tagName: 'A', textContent: 'No href', getAttribute: () => null, querySelectorAll: () => [], closest: () => null,
+  };
+  document.click([bareAnchor]);
+  assert.equal(events.length, 0);
+
+  // A non-interactive ARIA role does not auto-capture.
+  const heading = {
+    tagName: 'DIV', textContent: 'Title', getAttribute: (name) => (name === 'role' ? 'heading' : null), querySelectorAll: () => [], closest: () => null,
+  };
+  document.click([heading]);
+  assert.equal(events.length, 0);
 });
