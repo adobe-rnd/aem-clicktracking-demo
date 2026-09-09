@@ -33,16 +33,25 @@ A click produces a semantic envelope like this:
   label: 'Watch the demo',
   type: 'link',
   href: 'https://example.com/demo',
-  context: { block: 'hero', section: 'overview', sectionStyles: ['highlight'] },
+  context: {
+    block: 'hero',
+    blockSlug: 'product-overview',
+    blockStyles: ['large'],
+    section: 'overview',
+    sectionStyles: ['highlight'],
+  },
   page: { language: 'en', url: 'https://example.com/', viewport: 'desktop' },
 }
 ```
 
-Block context comes from `data-block-name`. Section context prefers an explicit
-annotation, then the first heading ID, then the first authored section style.
-Generated `*-container` classes are excluded. The page example in
-`scripts/scripts.js` samples language, canonical or query-free URL, and viewport
-once during eager loading.
+Explicit annotation context wins. Otherwise `block` comes from `data-block-name`;
+block and section slugs use `aria-labelledby` text, `aria-label`, then the first
+heading ID or text. Style arrays omit structural names and generated
+`*-container` classes. Click labels use the same accessible-name approximation
+before visible text, while an interactive ARIA role precedes the element tag for
+`type`. These small deterministic DOM rules are portable; runtime code does not
+query browser accessibility-tree APIs. The page example samples language,
+canonical or query-free URL, and viewport once during eager loading.
 
 ## Stateful controls
 
@@ -52,22 +61,25 @@ calling `track()`, and do not also `trackAs()` the same control:
 ```js
 button.setAttribute('aria-expanded', expanded);
 panel.hidden = !expanded;
-track(expanded ? 'accordion:open' : 'accordion:close', {
+track(expanded ? 'show' : 'hide', {
   id: 'accordion|shipping',
+  type: 'accordion-item',
+  element: button,
   state: { expanded },
 });
 ```
 
-The accordion reports `accordion:open` and `accordion:close`. The native dialog
-reports `dialog:open` after `showModal()` and `dialog:close` from its `close`
-event, so Escape and close-button behavior share one path.
+Stateful controls use `show` and `hide`; `type` distinguishes `accordion-item`
+from `dialog`. Passing `element` derives the same context as a click and does not
+include the DOM node in the emitted event. The dialog reports `hide` from its
+native `close` event, so Escape and close-button behavior share one path.
 
 ## Adobe Analytics reference
 
-`scripts/scripts.js` maps semantic clicks to XDM and sends them through the
-vendored `plugins/martech` integration. Web SDK automatic click collection is
-disabled to avoid duplicates; the original semantic envelope is retained in
-the data object for customer mapping.
+`scripts/scripts.js` maps every semantic event to XDM and calls the vendored
+martech library's `sendAnalyticsEvent()` helper directly. The Adobe Client Data
+Layer and Web SDK automatic click collection are disabled; the original envelope
+is retained in the data object for customer mapping.
 
 Adobe collection remains pending until the project's CMP publishes
 `consent.update`. The included `scripts/consent-check.js` is only a demo adapter;

@@ -33,11 +33,11 @@ export default function decorate(block) {
       const expanded = button.getAttribute('aria-expanded') !== 'true';
       button.setAttribute('aria-expanded', String(expanded));
       panel.hidden = !expanded;
-      track(expanded ? 'accordion:open' : 'accordion:close', {
+      track(expanded ? 'show' : 'hide', {
         id: `accordion|${key}`,
         label,
-        type: 'button',
-        block: 'accordion',
+        type: 'accordion-item',
+        element: button,
         state: { expanded },
       });
     });

@@ -7,6 +7,7 @@ class FakeDocument {
     this.listeners = new Map();
     this.addCalls = [];
     this.baseURI = 'https://example.com/products/';
+    this.nodes = new Map();
   }
 
   addEventListener(type, listener, options) {
@@ -24,6 +25,10 @@ class FakeDocument {
   dispatchEvent(event) {
     this.listeners.get(event.type)?.listener(event);
     return true;
+  }
+
+  getElementById(id) {
+    return this.nodes.get(id) ?? null;
   }
 
   click(path) {
@@ -153,16 +158,118 @@ test('clicks use the stable envelope with derived and explicit values', async ()
   assert.equal(events[1].href, 'https://example.com/');
 });
 
+test('each click receives an isolated context snapshot', async () => {
+  const document = new FakeDocument();
+  globalThis.document = document;
+  globalThis.CustomEvent = FakeCustomEvent;
+  const { configureTracking, trackAs } = await loadTracking();
+  const events = [];
+  const block = {
+    dataset: { blockName: 'cards' },
+    classList: ['block', 'cards', 'compact'],
+    getAttribute: () => null,
+    querySelector: () => null,
+  };
+  const section = {
+    classList: ['section', 'highlight'],
+    getAttribute: () => null,
+    querySelector: () => null,
+  };
+  const link = {
+    tagName: 'A',
+    textContent: 'Explore',
+    href: '/explore',
+    getAttribute: () => null,
+    closest: (selector) => (selector === '[data-block-name]' ? block : section),
+  };
+
+  // Context is resolved fresh on each click, so every event owns its derived
+  // arrays; a customer mutating one event's context cannot leak into the next.
+  configureTracking({
+    onTrack: (event) => {
+      events.push(event);
+      if (events.length === 1) {
+        event.context.block = 'mutated';
+        event.context.blockStyles.push('mutated');
+        event.context.sectionStyles.length = 0;
+      }
+    },
+  });
+  trackAs(link, { id: 'cards|explore' });
+  document.click([link]);
+  document.click([link]);
+
+  assert.deepEqual(events[1].context, {
+    block: 'cards',
+    blockStyles: ['compact'],
+    sectionStyles: ['highlight'],
+  });
+  assert.notEqual(events[0].context, events[1].context);
+  assert.notEqual(events[0].context.blockStyles, events[1].context.blockStyles);
+});
+
+test('click labels and types prefer deterministic accessible semantics', async () => {
+  const document = new FakeDocument();
+  globalThis.document = document;
+  globalThis.CustomEvent = FakeCustomEvent;
+  const { configureTracking, trackAs } = await loadTracking();
+  const events = [];
+  document.nodes.set('verb', { textContent: '  View ' });
+  document.nodes.set('subject', { textContent: ' product details ' });
+  document.nodes.set('blank', { textContent: ' \n ' });
+  const attributes = {
+    'aria-labelledby': 'verb missing subject',
+    'aria-label': 'ARIA fallback',
+    role: 'button',
+  };
+  const control = {
+    tagName: 'DIV',
+    textContent: 'Fallback text',
+    closest: () => null,
+    getAttribute: (name) => attributes[name] ?? null,
+  };
+
+  configureTracking({ onTrack: (event) => events.push(event) });
+  trackAs(control, { id: 'product|details' });
+  document.click([control]);
+  assert.equal(events[0].label, 'View product details');
+  assert.equal(events[0].type, 'button');
+
+  trackAs(control, { id: 'product|details', label: ' Explicit label ', type: 'link' });
+  document.click([control]);
+  assert.equal(events[1].label, 'Explicit label');
+  assert.equal(events[1].type, 'link');
+
+  attributes['aria-labelledby'] = 'blank';
+  attributes['aria-label'] = 'ARIA fallback';
+  ['checkbox', 'radio', 'switch', 'option', 'menuitem'].forEach((role) => {
+    attributes.role = role;
+    trackAs(control, { id: `control|${role}` });
+    document.click([control]);
+  });
+  assert.deepEqual(events.slice(2).map(({ label, type }) => ({ label, type })), [
+    'checkbox', 'radio', 'switch', 'option', 'menuitem',
+  ].map((type) => ({ label: 'ARIA fallback', type })));
+});
+
 test('context derives stable AEM block and section semantics', async () => {
   const document = new FakeDocument();
   globalThis.document = document;
   globalThis.CustomEvent = FakeCustomEvent;
   const { configureTracking, trackAs } = await loadTracking();
   const events = [];
-  const block = { dataset: { blockName: 'cards' } };
-  const heading = { id: 'business-capabilities' };
+  document.nodes.set('block-label', { textContent: ' Product cards ' });
+  const blockHeading = { id: '', textContent: 'Fallback block heading' };
+  const block = {
+    dataset: { blockName: 'cards' },
+    classList: ['block', 'cards', 'compact', 'cards-container', 'bordered'],
+    getAttribute: (name) => ({ 'aria-labelledby': 'block-label', 'aria-label': 'Block fallback' })[name] ?? null,
+    querySelector: () => blockHeading,
+  };
+  const heading = { id: '', textContent: 'Business capabilities' };
   const section = {
     classList: ['section', 'cards-container', 'highlight', 'dark'],
+    getAttribute: (name) => (name === 'aria-label' ? 'Support area' : null),
     querySelector: () => heading,
   };
   const link = {
@@ -178,23 +285,96 @@ test('context derives stable AEM block and section semantics', async () => {
   document.click([link]);
   assert.deepEqual(events[0].context, {
     block: 'cards',
-    section: 'business-capabilities',
+    blockSlug: 'product-cards',
+    blockStyles: ['compact', 'bordered'],
+    section: 'support-area',
     sectionStyles: ['highlight', 'dark'],
   });
 
-  section.querySelector = () => null;
-  trackAs(link, { id: 'cards|explore', section: 'featured', block: 'promo' });
+  trackAs(link, {
+    id: 'cards|explore',
+    block: 'ignored-promo',
+    section: 'ignored-featured',
+    context: {
+      block: 'promo',
+      blockSlug: 'campaign-promo',
+      blockStyles: ['wide'],
+      section: 'featured',
+      sectionStyles: ['accent'],
+    },
+  });
+  block.classList.push('dynamic');
+  section.classList.push('dynamic');
   document.click([link]);
   assert.deepEqual(events[1].context, {
     block: 'promo',
+    blockSlug: 'campaign-promo',
+    blockStyles: ['wide'],
     section: 'featured',
-    sectionStyles: ['highlight', 'dark'],
+    sectionStyles: ['accent'],
   });
 
+  block.getAttribute = () => null;
+  blockHeading.id = 'featured-cards';
+  section.getAttribute = () => null;
+  trackAs(link, { id: 'cards|explore' });
+  // Context resolves at click time, so classes added after trackAs are reflected.
+  block.classList.push('late');
+  section.classList.push('late');
+  document.click([link]);
+  assert.equal(events[2].context.blockSlug, 'featured-cards');
+  assert.equal(events[2].context.section, 'business-capabilities');
+  assert.deepEqual(events[2].context.blockStyles, ['compact', 'bordered', 'dynamic', 'late']);
+  assert.deepEqual(events[2].context.sectionStyles, ['highlight', 'dark', 'dynamic', 'late']);
+
+  block.querySelector = () => null;
+  section.querySelector = () => null;
   trackAs(link, { id: 'cards|explore' });
   document.click([link]);
-  assert.equal(events[2].context.section, 'highlight');
+  assert.equal(events[3].context.blockSlug, undefined);
+  assert.equal(events[3].context.section, undefined);
   assert.doesNotMatch(JSON.stringify(events), /selector|position|index/);
+});
+
+test('explicit events derive context from an element without leaking it', async () => {
+  const document = new FakeDocument();
+  globalThis.document = document;
+  globalThis.CustomEvent = FakeCustomEvent;
+  const { configureTracking, track } = await loadTracking();
+  const events = [];
+  const block = {
+    dataset: { blockName: 'dialog' },
+    classList: ['block', 'dialog', 'wide'],
+    getAttribute: () => 'Product demo',
+    querySelector: () => null,
+  };
+  const section = {
+    classList: ['section', 'modal-container', 'dark'],
+    getAttribute: () => 'Offers',
+    querySelector: () => null,
+  };
+  const element = {
+    closest: (selector) => (selector === '[data-block-name]' ? block : section),
+  };
+
+  configureTracking({ onTrack: (event) => events.push(event) });
+  track('show', {
+    element,
+    id: 'dialog|product-demo',
+    block: 'ignored-dialog',
+    blockSlug: 'explicit-demo',
+    sectionStyles: ['accent'],
+    context: { block: 'dialog', section: 'campaign' },
+  });
+
+  assert.deepEqual(events[0].context, {
+    block: 'dialog',
+    blockSlug: 'explicit-demo',
+    blockStyles: ['wide'],
+    section: 'campaign',
+    sectionStyles: ['accent'],
+  });
+  assert.equal(Object.hasOwn(events[0], 'element'), false);
 });
 
 test('DOM and callback hooks receive every event without affecting interaction', async () => {
@@ -226,7 +406,7 @@ test('DOM and callback hooks receive every event without affecting interaction',
   trackAs(link, { id: 'hero|demo' });
 
   assert.doesNotThrow(() => document.click([link]));
-  assert.doesNotThrow(() => track('dialog:open', { id: 'hero|demo' }));
+  assert.doesNotThrow(() => track('show', { id: 'hero|demo' }));
   assert.equal(domEvents, 2);
   assert.equal(callbackEvents, 2);
 });
@@ -239,9 +419,9 @@ test('track keeps its event argument authoritative', async () => {
   const events = [];
   configureTracking({ onTrack: (event) => events.push(event) });
 
-  track('dialog:open', { id: 'demo|dialog', event: 'click' });
+  track('show', { id: 'demo|dialog', event: 'click' });
 
-  assert.equal(events[0].event, 'dialog:open');
+  assert.equal(events[0].event, 'show');
 });
 
 test('an older cleanup cannot remove a newer configuration', async () => {

@@ -46,7 +46,7 @@ test('the project supplies privacy-conscious page context once', async () => {
   assert.equal((await loadPageAttributeExample({ canonical: null, width: 1200 })).viewport, 'desktop');
 });
 
-test('the Adobe adapter maps semantic clicks and lifecycle configuration', async () => {
+test('the Adobe adapter sends semantic events directly through Alloy', async () => {
   const semanticEvent = {
     event: 'click',
     id: 'hero|demo',
@@ -59,19 +59,21 @@ test('the Adobe adapter maps semantic clicks and lifecycle configuration', async
   const calls = [];
   globalThis.window = { trustedTypes: null };
   globalThis.document = {};
-  globalThis.__pushEvent = (...args) => calls.push(args);
+  globalThis.__sendAnalytics = (...args) => {
+    calls.push(args);
+    return Promise.resolve();
+  };
   let source = await readFile(new URL('../scripts/scripts.js', import.meta.url), 'utf8');
   const projectSource = source;
   source = source
     .replace(/import\s+[\s\S]*?\sfrom\s+['"][^'"]+['"];\n/g, '')
     .replace(/\nloadPage\(\);\s*$/, '')
-    .replace(/^/, 'const pushEventToDataLayer = (...args) => globalThis.__pushEvent(...args);\n')
-    .concat('\nexport { sendClickToAdobe as __sendClickToAdobe };');
+    .replace(/^/, 'const sendAnalyticsEvent = (...args) => globalThis.__sendAnalytics(...args);\n')
+    .concat('\nexport { sendToAdobe as __sendToAdobe };');
   const module = await import(`data:text/javascript,${encodeURIComponent(source)}#${Math.random()}`);
 
-  module.__sendClickToAdobe(semanticEvent);
+  await module.__sendToAdobe(semanticEvent);
   assert.deepEqual(calls, [[
-    'eds:track',
     {
       eventType: 'web.webinteraction.linkClicks',
       web: {
@@ -85,13 +87,37 @@ test('the Adobe adapter maps semantic clicks and lifecycle configuration', async
     },
     { eds: { tracking: semanticEvent } },
   ]]);
+  await module.__sendToAdobe({ ...semanticEvent, event: 'hide', type: 'dialog', href: undefined });
+  assert.equal(calls[1][0].eventType, 'eds.hide');
+  assert.equal(Object.hasOwn(calls[1][0].web.webInteraction, 'linkClicks'), false);
+  assert.equal(calls[1][1].eds.tracking.event, 'hide');
   assert.match(projectSource, /datastreamId:\s*'cc68fdd3-4db1-432c-adce-288917ddf108'/);
   assert.match(projectSource, /orgId:\s*'908936ED5D35CC220A495CD4@AdobeOrg'/);
   assert.match(projectSource, /clickCollectionEnabled:\s*false/);
+  assert.match(projectSource, /},\s*{\s*personalization:\s*false,\s*dataLayer:\s*false,?\s*}\)/);
+  assert.match(projectSource, /sendAnalyticsEvent/);
+  assert.doesNotMatch(projectSource, /pushEventToDataLayer/);
   assert.match(projectSource, /personalization:\s*false/);
   assert.match(projectSource, /martechEager\(\)/);
   assert.match(projectSource, /martechLazy\(\)/);
   assert.match(projectSource, /martechDelayed\(\)/);
+});
+
+test('the Adobe adapter contains rejected direct deliveries', async () => {
+  globalThis.window = { trustedTypes: null };
+  globalThis.document = {};
+  globalThis.__sendAnalytics = () => Promise.reject(new Error('Alloy unavailable'));
+  let source = await readFile(new URL('../scripts/scripts.js', import.meta.url), 'utf8');
+  source = source
+    .replace(/import\s+[\s\S]*?\sfrom\s+['"][^'"]+['"];\n/g, '')
+    .replace(/\nloadPage\(\);\s*$/, '')
+    .replace(/^/, 'const sendAnalyticsEvent = (...args) => globalThis.__sendAnalytics(...args);\n')
+    .concat('\nexport { sendToAdobe as __sendToAdobe };');
+  const module = await import(`data:text/javascript,${encodeURIComponent(source)}#${Math.random()}`);
+
+  await assert.doesNotReject(() => module.__sendToAdobe({
+    event: 'hide', label: 'Product demo', type: 'dialog', context: {}, page: {},
+  }));
 });
 
 test('Adobe collection remains pending until the project consent event', async () => {
@@ -185,7 +211,7 @@ test('the AEM lifecycle preserves authored language and runs every martech phase
       );
       const martechDelayed = () => call('martechDelayed', Promise.resolve());
       const updateUserConsent = () => {};
-      const pushEventToDataLayer = () => {};
+      const sendAnalyticsEvent = () => Promise.resolve();
       const configureTracking = () => call('configureTracking');
       const setPageAttributes = (value) => call('setPageAttributes:' + value.language);
       const decorateTemplateAndTheme = () => call('decorateTemplateAndTheme');

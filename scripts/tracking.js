@@ -1,11 +1,23 @@
 const annotations = new WeakMap();
-const page = new Map();
+const page = {};
+const contextFields = ['block', 'blockSlug', 'blockStyles', 'section', 'sectionStyles'];
 let onTrack;
 let listening = false;
 let owner;
 
-function sanitize(value = '') {
-  return String(value).replace(/\s+/g, ' ').trim();
+function sanitize(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function accessibleName(element) {
+  const labelledBy = element?.getAttribute?.('aria-labelledby');
+  const referenced = sanitize(labelledBy?.split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent).join(' '));
+  return referenced || sanitize(element?.getAttribute?.('aria-label'));
+}
+
+function slug(value) {
+  return sanitize(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '');
 }
 
 function absoluteURL(value) {
@@ -17,37 +29,53 @@ function absoluteURL(value) {
   }
 }
 
-function elementContext(element, annotation) {
-  const block = element.closest?.('[data-block-name]');
-  const section = element.closest?.('.section');
-  const sectionStyles = annotation.sectionStyles ?? annotation.context?.sectionStyles
-    ?? [...(section?.classList ?? [])].filter((name) => name !== 'section' && !name.endsWith('-container'));
-  const heading = section?.querySelector('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]');
-  const blockName = annotation.block ?? annotation.context?.block ?? block?.dataset.blockName;
-  const sectionName = annotation.section ?? annotation.context?.section
-    ?? heading?.id ?? sectionStyles[0];
-  return {
+function identity(element) {
+  const heading = element?.querySelector?.('h1,h2,h3,h4,h5,h6');
+  return slug(accessibleName(element)) || heading?.id || slug(heading?.textContent);
+}
+
+// Blocks pass their block name (drops the `block` marker plus the name class);
+// sections pass no name (drops the `section` marker). Generated `*-container`
+// wrappers are never styles.
+function styles(element, name) {
+  return [...(element?.classList ?? [])]
+    .filter((value) => value !== (name ? 'block' : 'section')
+      && value !== name && !value.endsWith('-container'));
+}
+
+function elementContext(element, annotation = {}) {
+  const block = element?.closest?.('[data-block-name]');
+  const section = element?.closest?.('.section');
+  const blockName = block?.dataset.blockName;
+  const blockSlug = identity(block);
+  const sectionSlug = identity(section);
+  const context = {
     ...(blockName && { block: blockName }),
-    ...(sectionName && { section: sectionName }),
-    ...(section && { sectionStyles }),
-    ...annotation.context,
+    ...(blockSlug && { blockSlug }),
+    ...(block && { blockStyles: styles(block, blockName) }),
+    ...(sectionSlug && { section: sectionSlug }),
+    ...(section && { sectionStyles: styles(section) }),
   };
+  contextFields.forEach((key) => {
+    if (key in annotation) context[key] = annotation[key];
+  });
+  return { ...context, ...annotation.context };
 }
 
 function clickEvent(element, annotation) {
   const tag = element.tagName?.toLowerCase();
-  const label = annotation.label
-    ?? element.getAttribute?.('aria-label')
-    ?? element.textContent;
-  const href = absoluteURL(Object.hasOwn(annotation, 'href') ? annotation.href : element.href);
+  const role = element.getAttribute?.('role');
+  const label = annotation.label ?? (accessibleName(element) || element.textContent);
+  const href = absoluteURL('href' in annotation ? annotation.href : element.href);
   return {
     event: 'click',
     id: annotation.id,
     label: sanitize(label),
-    type: annotation.type ?? ({ a: 'link', button: 'button' }[tag] ?? tag),
+    type: annotation.type ?? (/^(button|link|tab|checkbox|radio|switch|option|menuitem)$/.test(role)
+      ? role : ({ a: 'link' }[tag] ?? tag)),
     ...(href && { href }),
     context: elementContext(element, annotation),
-    page: Object.fromEntries(page),
+    page: { ...page },
   };
 }
 
@@ -85,7 +113,7 @@ export function configureTracking(options = {}) {
 }
 
 export function setPageAttributes(attributes) {
-  Object.entries(attributes).forEach(([key, value]) => page.set(key, value));
+  Object.assign(page, attributes);
 }
 
 export function trackAs(element, annotation) {
@@ -93,18 +121,13 @@ export function trackAs(element, annotation) {
 }
 
 export function track(event, details = {}) {
-  const {
-    block, section, sectionStyles, context, ...fields
-  } = details;
+  const fields = { ...details };
+  const { element } = details;
+  [...contextFields, 'element'].forEach((key) => delete fields[key]);
   deliver({
     ...fields,
     event,
-    context: {
-      ...(block && { block }),
-      ...(section && { section }),
-      ...(sectionStyles && { sectionStyles }),
-      ...context,
-    },
-    page: Object.fromEntries(page),
+    context: elementContext(element, details),
+    page: { ...page },
   });
 }

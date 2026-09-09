@@ -18,28 +18,29 @@ import {
   martechDelayed,
   martechEager,
   martechLazy,
-  pushEventToDataLayer,
+  sendAnalyticsEvent,
   updateUserConsent,
 } from '../plugins/martech/src/index.js';
 /* eslint-enable import/no-relative-packages */
 
-function sendClickToAdobe(event) {
-  if (event.event !== 'click') return;
-  pushEventToDataLayer(
-    'eds:track',
+function sendToAdobe(event) {
+  const click = event.event === 'click';
+  return sendAnalyticsEvent(
     {
-      eventType: 'web.webinteraction.linkClicks',
+      eventType: click ? 'web.webinteraction.linkClicks' : `eds.${event.event}`,
       web: {
         webInteraction: {
           name: event.label || event.id,
           type: 'other',
           ...(event.href && { URL: event.href }),
-          linkClicks: { value: 1 },
+          ...(click && { linkClicks: { value: 1 } }),
         },
       },
     },
     { eds: { tracking: event } },
-  );
+    // Contain delivery failures: a rejected Alloy send must not surface as an
+    // unhandled rejection or affect the interaction (AC-4).
+  ).catch(() => undefined);
 }
 
 function applyConsent({ detail }) {
@@ -218,11 +219,11 @@ async function loadEager(doc) {
     orgId: '908936ED5D35CC220A495CD4@AdobeOrg',
     clickCollectionEnabled: false,
     defaultConsent: 'pending',
-  }, { personalization: false })
+  }, { personalization: false, dataLayer: false })
     .then(() => martechEager())
     .catch(() => undefined);
   window.addEventListener('consent.update', applyConsent);
-  configureTracking({ onTrack: sendClickToAdobe });
+  configureTracking({ onTrack: sendToAdobe });
   setPageAttributes(getPageAttributes());
   decorateTemplateAndTheme();
   const main = doc.querySelector('main');

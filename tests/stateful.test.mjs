@@ -127,7 +127,7 @@ function accordionBlock(label, headingId) {
   };
 }
 
-test('accordion updates ARIA state before reporting explicit open and close events', async () => {
+test('accordion updates ARIA state before reporting show and hide events', async () => {
   const events = [];
   let activeButton;
   let activePanel;
@@ -172,48 +172,48 @@ test('accordion updates ARIA state before reporting explicit open and close even
 
   assert.deepEqual(events, [
     {
-      event: 'accordion:open',
+      event: 'show',
       detail: {
         id: 'accordion|shipping',
         label: 'Shipping',
-        type: 'button',
-        block: 'accordion',
+        type: 'accordion-item',
+        element: button,
         state: { expanded: true },
       },
       expanded: 'true',
       hidden: false,
     },
     {
-      event: 'accordion:close',
+      event: 'hide',
       detail: {
         id: 'accordion|shipping',
         label: 'Shipping',
-        type: 'button',
-        block: 'accordion',
+        type: 'accordion-item',
+        element: button,
         state: { expanded: false },
       },
       expanded: 'false',
       hidden: true,
     },
     {
-      event: 'accordion:open',
+      event: 'show',
       detail: {
         id: 'accordion|shipping',
         label: 'Shipping',
-        type: 'button',
-        block: 'accordion',
+        type: 'accordion-item',
+        element: repeatedButton,
         state: { expanded: true },
       },
       expanded: 'true',
       hidden: false,
     },
     {
-      event: 'accordion:open',
+      event: 'show',
       detail: {
         id: 'accordion|配送',
         label: '配送',
-        type: 'button',
-        block: 'accordion',
+        type: 'accordion-item',
+        element: fallbackButton,
         state: { expanded: true },
       },
       expanded: 'true',
@@ -222,7 +222,7 @@ test('accordion updates ARIA state before reporting explicit open and close even
   ]);
 });
 
-test('native dialog reports explicit open and close events after state changes', async () => {
+test('native dialog reports show and hide events after state changes', async () => {
   const events = [];
   const makeBlock = (label = 'Product demo', headingId = 'product-demo') => {
     const heading = headingId ? new Element('h2', label) : null;
@@ -264,45 +264,45 @@ test('native dialog reports explicit open and close events after state changes',
 
   assert.deepEqual(events, [
     {
-      event: 'dialog:open',
+      event: 'show',
       detail: {
         id: 'dialog|product-demo',
         label: 'Product demo',
         type: 'dialog',
-        block: 'dialog',
+        element: trigger,
         state: { open: true },
       },
       open: true,
     },
     {
-      event: 'dialog:close',
+      event: 'hide',
       detail: {
         id: 'dialog|product-demo',
         label: 'Product demo',
         type: 'dialog',
-        block: 'dialog',
+        element: dialog,
         state: { open: false },
       },
       open: false,
     },
     {
-      event: 'dialog:open',
+      event: 'show',
       detail: {
         id: 'dialog|product-demo',
         label: 'Product demo',
         type: 'dialog',
-        block: 'dialog',
+        element: repeatedTrigger,
         state: { open: true },
       },
       open: true,
     },
     {
-      event: 'dialog:close',
+      event: 'hide',
       detail: {
         id: 'dialog|product-demo',
         label: 'Product demo',
         type: 'dialog',
-        block: 'dialog',
+        element: repeatedDialog,
         state: { open: false },
       },
       open: false,
@@ -318,22 +318,22 @@ test('native dialog reports explicit open and close events after state changes',
   fallbackDialog.close();
   assert.deepEqual(events.slice(-2).map(({ event, detail }) => ({ event, detail })), [
     {
-      event: 'dialog:open',
+      event: 'show',
       detail: {
         id: 'dialog|製品デモ',
         label: '製品デモ',
         type: 'dialog',
-        block: 'dialog',
+        element: fallbackTrigger,
         state: { open: true },
       },
     },
     {
-      event: 'dialog:close',
+      event: 'hide',
       detail: {
         id: 'dialog|製品デモ',
         label: '製品デモ',
         type: 'dialog',
-        block: 'dialog',
+        element: fallbackDialog,
         state: { open: false },
       },
     },
@@ -349,15 +349,16 @@ test('stateful examples do not add component inference or duplicate click tracki
 
   assert.doesNotMatch(accordion, /trackAs/);
   assert.doesNotMatch(dialog, /trackAs/);
-  assert.doesNotMatch(tracking, /accordion|dialog|tab/i);
+  assert.doesNotMatch(tracking, /accordion|dialog/i);
 });
 
 test('README documents the portable stateful pattern and pinned subtree update', async () => {
   const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
 
   assert.match(readme, /update.*ARIA.*before.*track\(\)/is);
-  assert.match(readme, /accordion:open/);
-  assert.match(readme, /dialog:close/);
+  assert.match(readme, /`show` and `hide`/);
+  assert.match(readme, /type.*`accordion-item`/s);
+  assert.match(readme, /type.*`dialog`/s);
   assert.match(
     readme,
     /git subtree pull --squash --prefix plugins\/martech git@github\.com:adobe-rnd\/aem-martech\.git 1aa3dee3c4791636efa9ad2994342f861c8e149b/,

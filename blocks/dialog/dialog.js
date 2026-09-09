@@ -39,21 +39,21 @@ export default function decorate(block) {
 
   trigger.addEventListener('click', () => {
     dialog.showModal();
-    track('dialog:open', {
+    track('show', {
       id: `dialog|${key}`,
       label,
       type: 'dialog',
-      block: 'dialog',
+      element: trigger,
       state: { open: dialog.open },
     });
   });
   close.addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => {
-    track('dialog:close', {
+    track('hide', {
       id: `dialog|${key}`,
       label,
       type: 'dialog',
-      block: 'dialog',
+      element: dialog,
       state: { open: dialog.open },
     });
   });
