@@ -1,0 +1,18 @@
+.dialog dialog {
+  border: 0;
+  border-radius: 8px;
+  max-width: min(640px, calc(100% - 32px));
+  padding: 24px;
+}
+
+.dialog dialog::backdrop {
+  background: rgb(0 0 0 / 60%);
+}
+
+.dialog .dialog-close {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  float: right;
+  font-size: 24px;
+}

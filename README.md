@@ -44,6 +44,24 @@ Generated `*-container` classes are excluded. The page example in
 `scripts/scripts.js` samples language, canonical or query-free URL, and viewport
 once during eager loading.
 
+## Stateful controls
+
+Components own their lifecycle semantics. Update native or ARIA state before
+calling `track()`, and do not also `trackAs()` the same control:
+
+```js
+button.setAttribute('aria-expanded', expanded);
+panel.hidden = !expanded;
+track(expanded ? 'accordion:open' : 'accordion:close', {
+  id: 'accordion|shipping',
+  state: { expanded },
+});
+```
+
+The accordion reports `accordion:open` and `accordion:close`. The native dialog
+reports `dialog:open` after `showModal()` and `dialog:close` from its `close`
+event, so Escape and close-button behavior share one path.
+
 ## Adobe Analytics reference
 
 `scripts/scripts.js` maps semantic clicks to XDM and sends them through the
@@ -56,11 +74,18 @@ Adobe collection remains pending until the project's CMP publishes
 replace that consent-check.js policy with the customer's production CMP before
 shipping.
 
+The subtree is pinned to `1aa3dee3c4791636efa9ad2994342f861c8e149b`. Reapply
+that exact source revision with:
+
+```sh
+git subtree pull --squash --prefix plugins/martech git@github.com:adobe-rnd/aem-martech.git 1aa3dee3c4791636efa9ad2994342f861c8e149b
+```
+
 ## Run locally
 
 ```sh
 npm install
 npm test
 npm run lint
-npx -y @adobe/aem-cli up
+npx -y @adobe/aem-cli up --html-folder drafts
 ```
