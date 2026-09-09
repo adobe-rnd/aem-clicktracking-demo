@@ -52,19 +52,78 @@ Wiring happens once, during eager load (`loadEager` in `scripts/scripts.js`):
 
 ## The four-function API
 
-`scripts/tracking.js` exports four functions and nothing else:
+`scripts/tracking.js` exports four functions and nothing else. Blocks import the
+two producers (`trackAs`, `track`); the project wires the two setup calls
+(`configureTracking`, `setPageAttributes`) once.
 
-- `configureTracking({ onTrack })` installs the delegated listener and returns a cleanup function.
-- `setPageAttributes(values)` adds shared page context to every event.
-- `trackAs(element, annotation)` privately annotates a clickable element (kept in a `WeakMap`, never in the DOM).
-- `track(event, details)` reports an explicit component lifecycle event.
+### `trackAs(element, annotation)` — annotate a clickable element
 
-Annotate controls in their block code:
+Mark an element so that clicking it emits a `click` event. The annotation is stored
+privately (in a `WeakMap`, never written to the DOM) and resolved into the full
+envelope at click time. Give it an `id`; everything else is optional and only
+*overrides* what the tracker would otherwise derive from the DOM.
+
+| Field | Meaning |
+|---|---|
+| `id` (required) | Your stable identifier for the control, e.g. `'hero\|cta'`. |
+| `label` | Override the derived accessible name / visible text. |
+| `type` | Override the derived type (`link` / `button` / interactive ARIA role). |
+| `href` | Override the derived link URL; `null` omits it. |
+| `context` | An object overriding any of `block`, `blockSlug`, `blockStyles`, `section`, `sectionStyles` (you may also pass those keys flat on the annotation). Unset keys are derived. |
 
 ```js
 import { trackAs } from '../../scripts/tracking.js';
 
+// Simplest — derive label, type, href, and context; just give it an id:
 trackAs(block.querySelector('a[href]'), { id: 'hero|cta' });
+
+// Override a couple of fields explicitly:
+trackAs(cta, { id: 'hero|cta', label: 'Watch the demo', context: { block: 'hero' } });
+```
+
+### `track(eventName, details)` — emit an explicit event
+
+Report an event yourself, for component state changes (open/close, show/hide) or
+anything that isn't a plain click. Use this *instead of* `trackAs` on the same
+control. Every key in `details` is emitted on the event **except** the ones the
+tracker consumes to build context:
+
+| Field | Meaning |
+|---|---|
+| `eventName` (1st arg) | The event string, e.g. `'show'`, `'hide'`, or your own. |
+| `element` | Optional — derive `context` from this element (exactly like a click). The element itself is **not** emitted. |
+| `block` / `blockSlug` / `blockStyles` / `section` / `sectionStyles` / `context` | Consumed to build `context`; not emitted verbatim. |
+| `id`, `label`, `type`, `state`, … | Passed straight through onto the emitted event (add any custom fields your analytics needs). |
+
+```js
+import { track } from '../../scripts/tracking.js';
+
+button.setAttribute('aria-expanded', expanded);
+track(expanded ? 'show' : 'hide', {
+  id: 'accordion|shipping',
+  type: 'accordion-item',
+  element: button,        // derive block/section context from here
+  state: { expanded },    // emitted as-is on the event
+});
+```
+
+### `configureTracking({ onTrack })` — set up delivery (once)
+
+Installs a single delegated click listener and routes every event — clicks and
+explicit `track()` calls alike — to your `onTrack(event)` callback. Returns a
+cleanup function that removes the listener. Events are also dispatched as the
+`eds:track` DOM event, so `onTrack` is optional if you only listen on the DOM.
+
+```js
+const stop = configureTracking({ onTrack: (event) => sendToAnalytics(event) });
+```
+
+### `setPageAttributes(values)` — shared page context (once)
+
+Merges page-level fields into every event's `page` object.
+
+```js
+setPageAttributes({ language: 'en', url: location.href, viewport: 'desktop' });
 ```
 
 ## The event envelope
