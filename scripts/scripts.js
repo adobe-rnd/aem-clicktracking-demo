@@ -65,6 +65,26 @@ function getPageAttributes() {
   };
 }
 
+/**
+ * Boots Adobe martech and wires the semantic tracker to the reference adapter:
+ * disables ACDL and Web SDK auto-click collection, gates Adobe collection on
+ * consent, routes every tracked event to `sendToAdobe`, and seeds shared page
+ * attributes. Runs once during eager load, after the document language default.
+ */
+function setupTracking() {
+  initMartech({
+    datastreamId: 'cc68fdd3-4db1-432c-adce-288917ddf108',
+    orgId: '908936ED5D35CC220A495CD4@AdobeOrg',
+    clickCollectionEnabled: false,
+    defaultConsent: 'pending',
+  }, { personalization: false, dataLayer: false })
+    .then(() => martechEager())
+    .catch(() => undefined);
+  window.addEventListener('consent.update', applyConsent);
+  configureTracking({ onTrack: sendToAdobe });
+  setPageAttributes(getPageAttributes());
+}
+
 if (window.trustedTypes && window.trustedTypes.createPolicy) {
   const innerTT = window.trustedTypes.createPolicy('tt-inner', {
     createHTML: (s) => s, // avoid stack overflow
@@ -214,17 +234,7 @@ export function decorateMain(main) {
  */
 async function loadEager(doc) {
   document.documentElement.lang ||= 'en';
-  initMartech({
-    datastreamId: 'cc68fdd3-4db1-432c-adce-288917ddf108',
-    orgId: '908936ED5D35CC220A495CD4@AdobeOrg',
-    clickCollectionEnabled: false,
-    defaultConsent: 'pending',
-  }, { personalization: false, dataLayer: false })
-    .then(() => martechEager())
-    .catch(() => undefined);
-  window.addEventListener('consent.update', applyConsent);
-  configureTracking({ onTrack: sendToAdobe });
-  setPageAttributes(getPageAttributes());
+  setupTracking();
   decorateTemplateAndTheme();
   const main = doc.querySelector('main');
   if (main) {
