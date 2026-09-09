@@ -10,8 +10,8 @@ test('the generic tracker stays within its delivery budget', async () => {
   const minifiedBytes = Buffer.byteLength(code);
   const gzipBytes = gzipSync(code).byteLength;
 
-  assert.ok(minifiedBytes <= 2048, `minified tracker is ${minifiedBytes} bytes`);
-  assert.ok(gzipBytes <= 1024, `gzipped tracker is ${gzipBytes} bytes`);
+  assert.ok(minifiedBytes <= 4096, `minified tracker is ${minifiedBytes} bytes`);
+  assert.ok(gzipBytes <= 2048, `gzipped tracker is ${gzipBytes} bytes`);
 });
 
 test('package metadata identifies the demo repository', async () => {

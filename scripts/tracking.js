@@ -9,11 +9,31 @@ function sanitize(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+// The authored accessible name only: `aria-labelledby` text, then `aria-label`.
+// Identity/slug derivation uses this, so authored names — never element content
+// — feed stable slugs.
 function accessibleName(element) {
   const labelledBy = element?.getAttribute?.('aria-labelledby');
   const referenced = sanitize(labelledBy?.split(/\s+/)
     .map((id) => document.getElementById(id)?.textContent).join(' '));
   return referenced || sanitize(element?.getAttribute?.('aria-label'));
+}
+
+// Approximates a control's accessible name for the human click label without
+// touching the browser accessibility tree. Resolution order (first non-empty
+// wins): authored aria name, then visible text — falling back to a descendant
+// `<img alt>` so icon/image-labeled controls are named — then the `title`
+// attribute, then an associated `<label>` (`element.labels` covers both
+// `label[for=id]` and a wrapping `<label>`). Content feeds only this label,
+// never the slug above, so display copy cannot leak into stable identity.
+function clickLabel(element) {
+  const content = sanitize(element?.textContent)
+    || sanitize([...(element?.querySelectorAll?.('img') ?? [])]
+      .map((img) => img.getAttribute?.('alt')).join(' '));
+  return accessibleName(element)
+    || content
+    || sanitize(element?.getAttribute?.('title'))
+    || sanitize([...(element?.labels ?? [])].map((node) => node.textContent).join(' '));
 }
 
 function slug(value) {
@@ -29,9 +49,15 @@ function absoluteURL(value) {
   }
 }
 
+// Best-effort descriptive slug, not guaranteed-stable identity. Prefers an
+// explicit authored id (the element's own `id`), then the authored accessible
+// name, then the first heading's `id`, then its slugified text.
 function identity(element) {
   const heading = element?.querySelector?.('h1,h2,h3,h4,h5,h6');
-  return slug(accessibleName(element)) || heading?.id || slug(heading?.textContent);
+  return element?.id
+    || slug(accessibleName(element))
+    || heading?.id
+    || slug(heading?.textContent);
 }
 
 // Blocks pass their block name (drops the `block` marker plus the name class);
@@ -46,9 +72,13 @@ function styles(element, name) {
 function elementContext(element, annotation = {}) {
   const block = element?.closest?.('[data-block-name]');
   const section = element?.closest?.('.section');
+  // Page-chrome fallback: a click outside any .section but inside a header,
+  // footer, or nav carries that region name as `section` (no sectionStyles).
+  // A real .section always wins.
+  const region = !section && element?.closest?.('header,footer,nav');
   const blockName = block?.dataset.blockName;
   const blockSlug = identity(block);
-  const sectionSlug = identity(section);
+  const sectionSlug = section ? identity(section) : region?.tagName?.toLowerCase();
   const context = {
     ...(blockName && { block: blockName }),
     ...(blockSlug && { blockSlug }),
@@ -65,7 +95,7 @@ function elementContext(element, annotation = {}) {
 function clickEvent(element, annotation) {
   const tag = element.tagName?.toLowerCase();
   const role = element.getAttribute?.('role');
-  const label = annotation.label ?? (accessibleName(element) || element.textContent);
+  const label = annotation.label ?? clickLabel(element);
   const href = absoluteURL('href' in annotation ? annotation.href : element.href);
   return {
     event: 'click',
@@ -81,6 +111,10 @@ function clickEvent(element, annotation) {
 
 function deliver(payload) {
   try {
+    // Unconditional: the eds:track DOM event fires for every tracked
+    // interaction regardless of consent. The producer does not gate this DOM
+    // path; enforcing consent before delivery is the consumer's / adapter's
+    // responsibility (see README).
     document.dispatchEvent(new CustomEvent('eds:track', { detail: payload }));
   } catch {
     // Customer listeners must not affect the interaction.

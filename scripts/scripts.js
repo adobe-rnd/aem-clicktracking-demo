@@ -30,7 +30,7 @@ function sendToAdobe(event) {
       eventType: click ? 'web.webinteraction.linkClicks' : `eds.${event.event}`,
       web: {
         webInteraction: {
-          name: event.label || event.id,
+          name: event.id || event.label,
           type: 'other',
           ...(event.href && { URL: event.href }),
           ...(click && { linkClicks: { value: 1 } }),

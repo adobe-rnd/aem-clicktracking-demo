@@ -78,7 +78,7 @@ test('the Adobe adapter sends semantic events directly through Alloy', async () 
       eventType: 'web.webinteraction.linkClicks',
       web: {
         webInteraction: {
-          name: 'Watch the demo',
+          name: 'hero|demo',
           type: 'other',
           URL: 'https://example.com/demo',
           linkClicks: { value: 1 },
@@ -87,10 +87,17 @@ test('the Adobe adapter sends semantic events directly through Alloy', async () 
     },
     { eds: { tracking: semanticEvent } },
   ]]);
+  // The human label stays a descriptive field on the retained envelope; it is
+  // never the primary reporting key.
+  assert.equal(calls[0][1].eds.tracking.label, 'Watch the demo');
+  // With no stable id the adapter falls back to the label for the name.
+  await module.__sendToAdobe({ ...semanticEvent, id: undefined });
+  assert.equal(calls[1][0].web.webInteraction.name, 'Watch the demo');
   await module.__sendToAdobe({ ...semanticEvent, event: 'hide', type: 'dialog', href: undefined });
-  assert.equal(calls[1][0].eventType, 'eds.hide');
-  assert.equal(Object.hasOwn(calls[1][0].web.webInteraction, 'linkClicks'), false);
-  assert.equal(calls[1][1].eds.tracking.event, 'hide');
+  assert.equal(calls[2][0].eventType, 'eds.hide');
+  assert.equal(calls[2][0].web.webInteraction.name, 'hero|demo');
+  assert.equal(Object.hasOwn(calls[2][0].web.webInteraction, 'linkClicks'), false);
+  assert.equal(calls[2][1].eds.tracking.event, 'hide');
   assert.match(projectSource, /datastreamId:\s*'cc68fdd3-4db1-432c-adce-288917ddf108'/);
   assert.match(projectSource, /orgId:\s*'908936ED5D35CC220A495CD4@AdobeOrg'/);
   assert.match(projectSource, /clickCollectionEnabled:\s*false/);

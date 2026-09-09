@@ -16,7 +16,7 @@ Four layers, each with one job:
 
 | Layer | File(s) | Responsibility |
 |---|---|---|
-| **Producer** | `scripts/tracking.js` | Generic, dependency-free core (≤2 KB min / ≤1 KB gzip). Four functions; builds one semantic envelope; emits it on the `eds:track` DOM event **and** an `onTrack` callback. Knows nothing about Adobe. |
+| **Producer** | `scripts/tracking.js` | Generic, dependency-free core (≤4 KB min / ≤2 KB gzip). Four functions; builds one semantic envelope; emits it on the `eds:track` DOM event **and** an `onTrack` callback. Knows nothing about Adobe. |
 | **Adapter + lifecycle** | `scripts/scripts.js` | The AEM boot sequence and the project's delivery choice: boots martech, maps each envelope to Adobe XDM, samples page attributes, wires consent. This is the file a customer edits. |
 | **Delivery** | `plugins/martech/` | Vendored Adobe Web SDK (Alloy) integration, pinned via `git subtree`. The core has no dependency on it. |
 | **Examples** | `blocks/*` | Copyable blocks: the hero annotates a CTA (`trackAs`); accordion and dialog emit lifecycle events (`track`). |
@@ -36,6 +36,15 @@ adapter knows about Adobe:
 
 Both hooks receive **every** event — use exactly one of them for analytics delivery,
 or you will report each interaction twice.
+
+> **⚠️ The `eds:track` DOM event is not consent-gated.** The producer dispatches
+> `eds:track` (and calls `onTrack`) **unconditionally**, for every tracked
+> interaction, **regardless of consent state**. The producer does not gate this
+> DOM path — enforcing consent before anything is *delivered* is the consumer's /
+> adapter's responsibility. In this demo the Adobe adapter gates *collection* via
+> `updateUserConsent` (Alloy holds events until `consent.update` grants
+> `collect`), but any listener you attach to `eds:track` receives events
+> immediately, so a listener that forwards data must apply its own consent check.
 
 Wiring happens once, during eager load (`loadEager` in `scripts/scripts.js`):
 
@@ -148,14 +157,30 @@ A click on an annotated element produces a stable, flat envelope:
 }
 ```
 
+**Stable key vs. descriptive context.** The stable reporting key is the authored
+`id` you pass to `trackAs` / `track` — that is what a destination should key on.
+`blockSlug` and `section` are **best-effort descriptive context, not
+guaranteed-stable identity**: they are derived from the DOM and can drift as
+markup or copy changes. To make a slug stable, give the block/section an explicit
+authored id — an element `id` or a heading `id` — and the slug uses it verbatim.
+
 Explicit annotation context wins. Otherwise `block` comes from `data-block-name`;
-block and section slugs use `aria-labelledby` text, `aria-label`, then the first
-heading ID or text. Style arrays omit structural names and generated `*-container`
-classes. Click labels use the same accessible-name approximation before visible text,
-while an interactive ARIA role precedes the element tag for `type`. These small
-deterministic DOM rules are portable; runtime code does not query browser
-accessibility-tree APIs, and context is resolved fresh at emit time (never snapshotted
-at `trackAs`), so each event owns its own derived arrays.
+block and section slugs prefer an explicit authored id (the element's own `id`,
+then the first heading's `id`), falling back to the authored accessible name
+(`aria-labelledby` text, then `aria-label`) and finally the slugified heading
+text. A click outside any block/section that lands in a `header`, `footer`, or
+`nav` carries that region name as `section` instead of empty context. Style
+arrays omit structural names and generated `*-container` classes.
+
+Click labels approximate the accessible name in order: an explicit `label`, then
+`aria-labelledby` / `aria-label`, then visible text — falling back to a
+descendant `<img alt>` so icon/image-labeled controls are named — then the
+`title` attribute, then an associated `<label>`. First non-empty wins, so an
+icon-only button resolves a real name instead of an empty string. An interactive
+ARIA role precedes the element tag for `type`. These small deterministic DOM
+rules are portable; runtime code does not query browser accessibility-tree APIs,
+and context is resolved fresh at emit time (never snapshotted at `trackAs`), so
+each event owns its own derived arrays.
 
 ## Stateful controls
 
@@ -183,9 +208,12 @@ event, so Escape and close-button behavior share one path.
 `scripts/scripts.js` is the reference adapter. `sendToAdobe()` maps each semantic
 event to XDM and calls the vendored martech library's `sendAnalyticsEvent()` directly
 (direct Alloy) — clicks become `web.webinteraction.linkClicks`, other events become
-`eds.<event>`. The original envelope is retained under `{ eds: { tracking: event } }`
-for customer mapping, and delivery failures are contained so a rejected send never
-becomes an unhandled rejection. To target a different destination, replace this one
+`eds.<event>`. The interaction `name` keys on the stable authored `id` (falling
+back to `label` only when no `id` is present), so the same control reports under
+one key across locales and copy edits; the human `label` rides along as a
+descriptive field on the retained envelope. The original envelope is retained
+under `{ eds: { tracking: event } }` for customer mapping, and delivery failures
+are contained so a rejected send never becomes an unhandled rejection. To target a different destination, replace this one
 file; `scripts/tracking.js` stays untouched.
 
 ## Update the vendored martech

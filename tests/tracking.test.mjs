@@ -449,3 +449,168 @@ test('an older cleanup cannot remove a newer configuration', async () => {
   document.click([link]);
   assert.deepEqual(events, ['new']);
 });
+
+test('click labels resolve icon, image, title, and associated-label controls', async () => {
+  const document = new FakeDocument();
+  globalThis.document = document;
+  globalThis.CustomEvent = FakeCustomEvent;
+  const { configureTracking, trackAs } = await loadTracking();
+  const events = [];
+  configureTracking({ onTrack: (event) => events.push(event) });
+
+  // Icon-only / image-labeled control: no text and no aria — the descendant
+  // <img alt> supplies a non-empty accessible name instead of ''.
+  const iconButton = {
+    tagName: 'BUTTON',
+    textContent: '  ',
+    getAttribute: () => null,
+    querySelectorAll: (selector) => (selector === 'img'
+      ? [{ getAttribute: (name) => (name === 'alt' ? '  Close ' : null) }]
+      : []),
+    closest: () => null,
+  };
+  trackAs(iconButton, { id: 'dialog|close' });
+  document.click([iconButton]);
+  assert.equal(events[0].label, 'Close');
+  // The image alt must not leak into a slug: with no block/section the context
+  // stays empty, proving identity never reads element content for slugs.
+  assert.deepEqual(events[0].context, {});
+
+  // Title-only control resolves from the title attribute.
+  const titled = {
+    tagName: 'SPAN',
+    textContent: '',
+    getAttribute: (name) => (name === 'title' ? 'Download report' : null),
+    querySelectorAll: () => [],
+    closest: () => null,
+  };
+  trackAs(titled, { id: 'row|download' });
+  document.click([titled]);
+  assert.equal(events[1].label, 'Download report');
+
+  // Form control named by an associated <label> (native element.labels covers
+  // both `label[for=id]` and a wrapping <label>).
+  const input = {
+    tagName: 'INPUT',
+    textContent: '',
+    getAttribute: () => null,
+    querySelectorAll: () => [],
+    labels: [{ textContent: '  Email   address ' }],
+    closest: () => null,
+  };
+  trackAs(input, { id: 'signup|email' });
+  document.click([input]);
+  assert.equal(events[2].label, 'Email address');
+
+  // Precedence: with BOTH visible text and a descendant <img alt>, the visible
+  // text wins — the alt is a fallback for the empty-text case, never concatenated.
+  const textAndIcon = {
+    tagName: 'BUTTON',
+    textContent: 'Save',
+    getAttribute: () => null,
+    querySelectorAll: (selector) => (selector === 'img'
+      ? [{ getAttribute: (name) => (name === 'alt' ? 'floppy disk' : null) }]
+      : []),
+    closest: () => null,
+  };
+  trackAs(textAndIcon, { id: 'form|save' });
+  document.click([textAndIcon]);
+  assert.equal(events[3].label, 'Save');
+});
+
+test('clicks outside a section carry region context for header, footer, and nav', async () => {
+  const document = new FakeDocument();
+  globalThis.document = document;
+  globalThis.CustomEvent = FakeCustomEvent;
+  const { configureTracking, trackAs } = await loadTracking();
+  const events = [];
+  configureTracking({ onTrack: (event) => events.push(event) });
+
+  const inRegion = (tagName) => ({
+    tagName: 'A',
+    textContent: 'Home',
+    href: '/',
+    getAttribute: () => null,
+    closest: (selector) => (selector === 'header,footer,nav' ? { tagName } : null),
+  });
+
+  ['HEADER', 'FOOTER', 'NAV'].forEach((tagName, i) => {
+    const link = inRegion(tagName);
+    trackAs(link, { id: `chrome|${tagName}` });
+    document.click([link]);
+    assert.equal(events[i].context.section, tagName.toLowerCase());
+    assert.equal(Object.hasOwn(events[i].context, 'sectionStyles'), false);
+    assert.equal(Object.hasOwn(events[i].context, 'block'), false);
+  });
+
+  // A real .section still wins over the region fallback.
+  const section = {
+    classList: ['section', 'highlight'],
+    getAttribute: (name) => (name === 'aria-label' ? 'Featured' : null),
+    querySelector: () => null,
+  };
+  const link = {
+    tagName: 'A',
+    textContent: 'Explore',
+    href: '/x',
+    getAttribute: () => null,
+    closest: (selector) => {
+      if (selector === '.section') return section;
+      if (selector === 'header,footer,nav') return { tagName: 'HEADER' };
+      return null;
+    },
+  };
+  trackAs(link, { id: 'featured|explore' });
+  document.click([link]);
+  assert.equal(events[3].context.section, 'featured');
+  assert.deepEqual(events[3].context.sectionStyles, ['highlight']);
+});
+
+test('slug derivation prefers an explicit authored id over derived names', async () => {
+  const document = new FakeDocument();
+  globalThis.document = document;
+  globalThis.CustomEvent = FakeCustomEvent;
+  const { configureTracking, trackAs } = await loadTracking();
+  const events = [];
+  configureTracking({ onTrack: (event) => events.push(event) });
+
+  const block = {
+    id: 'promo-2026',
+    dataset: { blockName: 'cards' },
+    classList: ['block', 'cards'],
+    getAttribute: (name) => (name === 'aria-label' ? 'Autumn promotions' : null),
+    querySelector: () => ({ id: 'heading-id', textContent: 'Heading text' }),
+  };
+  const section = {
+    id: 'main-content',
+    classList: ['section'],
+    getAttribute: () => null,
+    querySelector: () => null,
+  };
+  const link = {
+    tagName: 'A',
+    textContent: 'Shop',
+    href: '/shop',
+    getAttribute: () => null,
+    closest: (selector) => (selector === '[data-block-name]' ? block : section),
+  };
+  trackAs(link, { id: 'cards|shop' });
+  document.click([link]);
+
+  // The element's own id wins over aria-label, heading id, and heading text.
+  assert.equal(events[0].context.blockSlug, 'promo-2026');
+  assert.equal(events[0].context.section, 'main-content');
+});
+
+test('the eds:track DOM path is documented and marked as not consent-gated', async () => {
+  const [trackingSource, readme] = await Promise.all([
+    readFile(new URL('../scripts/tracking.js', import.meta.url), 'utf8'),
+    readFile(new URL('../README.md', import.meta.url), 'utf8'),
+  ]);
+  // A source comment marks the unconditional dispatch.
+  assert.match(trackingSource, /regardless of consent/i);
+  // The README warns prominently and assigns enforcement to the consumer/adapter.
+  assert.match(readme, /not consent-gated/i);
+  assert.match(readme, /regardless of consent/i);
+  assert.match(readme, /enforc\w+ consent[\s\S]{0,80}consumer|consent[\s\S]{0,40}consumer.{0,40}adapter.{0,40}responsib/i);
+});
