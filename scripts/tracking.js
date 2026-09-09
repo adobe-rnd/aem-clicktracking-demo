@@ -2,6 +2,14 @@ const annotations = new WeakMap();
 const page = {};
 const contextFields = ['block', 'blockSlug', 'blockStyles', 'section', 'sectionStyles'];
 const interactiveRoles = /^(button|link|tab|checkbox|radio|switch|option|menuitem)$/;
+// The impression (`view`) registry: observed element → { annotation, config,
+// dwell timer, current visibility, cleanup }. Views are visibility observation,
+// separate from the click delegation path but sharing one envelope and delivery.
+// WeakMap (like `annotations`) so a record never keeps its element alive.
+const views = new WeakMap();
+const viewDefaults = { threshold: 0.5, minVisibleMs: 1000, once: true };
+let viewConfig = viewDefaults;
+let observer;
 let onTrack;
 let listening = false;
 let owner;
@@ -93,13 +101,17 @@ function elementContext(element, annotation = {}) {
   return { ...context, ...annotation.context };
 }
 
-function clickEvent(element, annotation) {
+// Builds the one semantic envelope shared by every event category. `name` is the
+// event kind (`click`, `view`, …); clicks and impressions call this identically so
+// a view is a click envelope with `event: 'view'` — same accessible label, type,
+// href, context, and page resolution.
+function buildEvent(name, element, annotation) {
   const tag = element.tagName?.toLowerCase();
   const role = element.getAttribute?.('role');
   const label = annotation.label ?? clickLabel(element);
   const href = absoluteURL('href' in annotation ? annotation.href : element.href);
   return {
-    event: 'click',
+    event: name,
     id: annotation.id,
     label: sanitize(label),
     type: annotation.type ?? (interactiveRoles.test(role) ? role : ({ a: 'link' }[tag] ?? tag)),
@@ -126,6 +138,31 @@ function deliver(payload) {
   }
 }
 
+// IntersectionObserver callback for impressions. Edge-triggered on the viewability
+// threshold: a rising edge (crossing to >= threshold) arms a dwell timer; if the
+// element is still visible after minVisibleMs the view is delivered, otherwise a
+// falling edge cancels the pending timer. A fire-once view unobserves itself after
+// delivery; a repeat view re-arms the next time it re-enters the band.
+function handleViewEntries(entries) {
+  entries.forEach((entry) => {
+    const record = views.get(entry.target);
+    if (!record) return;
+    const visible = entry.isIntersecting && entry.intersectionRatio >= record.config.threshold;
+    if (visible === record.visible) return;
+    record.visible = visible;
+    if (visible) {
+      record.timer = setTimeout(() => {
+        record.timer = undefined;
+        deliver(buildEvent('view', entry.target, record.annotation));
+        if (record.config.once) record.cleanup();
+      }, record.config.minVisibleMs);
+    } else if (record.timer) {
+      clearTimeout(record.timer);
+      record.timer = undefined;
+    }
+  });
+}
+
 // Auto-capture predicate: a click on a natively or ARIA-interactive element is
 // tracked even without a trackAs annotation. Reads tagName/attributes directly
 // (no element.matches) so it works on real elements and plain test mocks alike.
@@ -147,13 +184,15 @@ function handleClick(event) {
   // annotation, so its id is absent and every field derives from the DOM.
   const annotated = path.find((node) => annotations.has(node));
   const element = annotated ?? path.find(isInteractive);
-  if (element) deliver(clickEvent(element, annotated ? annotations.get(element) : {}));
+  if (element) deliver(buildEvent('click', element, annotated ? annotations.get(element) : {}));
 }
 
 export function configureTracking(options = {}) {
   const current = {};
   owner = current;
   onTrack = options.onTrack;
+  // Global view policy default; each viewAs call may still override per element.
+  viewConfig = { ...viewDefaults, ...options.view };
   if (!listening) {
     document.addEventListener('click', handleClick, true);
     listening = true;
@@ -171,6 +210,40 @@ export function setPageAttributes(attributes) {
 
 export function trackAs(element, annotation) {
   annotations.set(element, annotation);
+}
+
+// Registers an element for an impression (`view`) event, delivered through the
+// same envelope and hooks as a click once the element meets the visibility policy
+// (default: >= 50% visible for >= 1s, fired once). `options` overrides that policy
+// per call (`threshold`, `minVisibleMs`, `once`). The IntersectionObserver is
+// created lazily on first use, so a page that never calls viewAs pays nothing.
+// Returns a cleanup that unobserves the element — the caller's leak guard for the
+// repeat case; a fire-once view unobserves itself after delivery.
+export function viewAs(element, annotation, options = {}) {
+  // Re-registration drops any prior pending dwell + observation for this element.
+  views.get(element)?.cleanup();
+  if (!observer) {
+    // Dense notification grid: an IntersectionObserver only delivers an entry when
+    // one of its configured thresholds is crossed, and the per-record check re-tests
+    // `ratio >= threshold`, so a coarse grid would silently miss off-grid thresholds
+    // (a `threshold: 0.6` would only fire near 0.75). Hundredths honor any configured
+    // threshold to 0.01 granularity.
+    observer = new IntersectionObserver(handleViewEntries, {
+      threshold: Array.from({ length: 101 }, (unused, i) => i / 100),
+    });
+  }
+  const cleanup = () => {
+    const record = views.get(element);
+    if (!record) return;
+    if (record.timer) clearTimeout(record.timer);
+    observer.unobserve(element);
+    views.delete(element);
+  };
+  views.set(element, {
+    annotation, config: { ...viewConfig, ...options }, visible: false, cleanup,
+  });
+  observer.observe(element);
+  return cleanup;
 }
 
 export function track(event, details = {}) {

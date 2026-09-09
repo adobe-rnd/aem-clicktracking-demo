@@ -1,9 +1,10 @@
 # AEM semantic click-tracking demo
 
-A small, **dependency-free** semantic click tracker for AEM Edge Delivery Services
-(EDS). It turns clicks and component state changes into stable, accessible,
-vendor-neutral events, and shows how to deliver them to Adobe without coupling the
-reusable core to any analytics vendor or DOM metadata contract.
+A small, **dependency-free** semantic click and impression tracker for AEM Edge
+Delivery Services (EDS). It turns clicks, impressions, and component state changes
+into stable, accessible, vendor-neutral events, and shows how to deliver them to
+Adobe without coupling the reusable core to any analytics vendor or DOM metadata
+contract.
 
 The design has one load-bearing idea: **a generic producer plus a project-owned
 adapter.** `scripts/tracking.js` only *produces* semantic events; `scripts/scripts.js`
@@ -16,10 +17,10 @@ Four layers, each with one job:
 
 | Layer | File(s) | Responsibility |
 |---|---|---|
-| **Producer** | `scripts/tracking.js` | Generic, dependency-free core (≤4 KB min / ≤2 KB gzip). Four functions; builds one semantic envelope; emits it on the `eds:track` DOM event **and** an `onTrack` callback. Knows nothing about Adobe. |
+| **Producer** | `scripts/tracking.js` | Generic, dependency-free core (≤4 KB min / ≤2 KB gzip). Five functions; builds one semantic envelope for clicks and impressions alike; emits it on the `eds:track` DOM event **and** an `onTrack` callback. Knows nothing about Adobe. |
 | **Adapter + lifecycle** | `scripts/scripts.js` | The AEM boot sequence and the project's delivery choice: boots martech, maps each envelope to Adobe XDM, samples page attributes, wires consent. This is the file a customer edits. |
 | **Delivery** | `plugins/martech/` | Vendored Adobe Web SDK (Alloy) integration, pinned via `git subtree`. The core has no dependency on it. |
-| **Examples** | `blocks/*` | Copyable blocks: the hero annotates a CTA (`trackAs`); accordion and dialog emit lifecycle events (`track`). |
+| **Examples** | `blocks/*` | Copyable blocks: the hero annotates a CTA (`trackAs`) and marks itself an impression (`viewAs`); accordion and dialog emit lifecycle events (`track`). |
 
 At runtime, every event flows one way — producer out to the two hooks, and only the
 adapter knows about Adobe:
@@ -63,10 +64,10 @@ Wiring happens once, during eager load (`loadEager` in `scripts/scripts.js`):
   (`applyConsent` → `updateUserConsent`); replace the demo `scripts/consent-check.js`
   with the customer's production CMP.
 
-## The four-function API
+## The five-function API
 
-`scripts/tracking.js` exports four functions and nothing else. Blocks import the
-two producers (`trackAs`, `track`); the project wires the two setup calls
+`scripts/tracking.js` exports five functions and nothing else. Blocks import the
+producers (`trackAs`, `track`, `viewAs`); the project wires the two setup calls
 (`configureTracking`, `setPageAttributes`) once.
 
 ### Automatic click tracking
@@ -146,9 +147,14 @@ Installs a single delegated click listener and routes every event — clicks and
 explicit `track()` calls alike — to your `onTrack(event)` callback. Returns a
 cleanup function that removes the listener. Events are also dispatched as the
 `eds:track` DOM event, so `onTrack` is optional if you only listen on the DOM.
+The optional `view` object sets the global impression policy consumed by
+[`viewAs`](#view--impression-events).
 
 ```js
-const stop = configureTracking({ onTrack: (event) => sendToAnalytics(event) });
+const stop = configureTracking({
+  onTrack: (event) => sendToAnalytics(event),
+  view: { threshold: 0.5, minVisibleMs: 1000, once: true }, // impression defaults
+});
 ```
 
 ### `setPageAttributes(values)` — shared page context (once)
@@ -226,6 +232,93 @@ Stateful controls use `show` and `hide`; `type` distinguishes `accordion-item` f
 `dialog`. Passing `element` derives the same context as a click and does not include
 the DOM node in the emitted event. The dialog reports `hide` from its native `close`
 event, so Escape and close-button behavior share one path.
+
+## View / impression events
+
+Clicks are event delegation; **views (impressions) are visibility observation.**
+`viewAs(element, annotation, options?)` registers an element for a `view` event that
+fires when the element is actually *seen*, backed by a single lazily-created
+`IntersectionObserver`. A page that never calls `viewAs` installs no observer and
+pays nothing.
+
+```js
+import { viewAs } from '../../scripts/tracking.js';
+
+export default function decorate(block) {
+  // Emit a `view` when the hero is at least 50% visible for 1s (the default policy).
+  viewAs(block, { id: 'hero|view' });
+}
+```
+
+The `annotation` is exactly the [`trackAs`](#trackaselement-annotation--annotate-a-clickable-element)
+annotation — same `id` / `label` / `type` / `context` resolution — because a view
+**reuses the same envelope as a click**, only with `event: 'view'`:
+
+```js
+{
+  event: 'view',            // the sole difference from a click envelope
+  id: 'hero|view',
+  label: 'Product overview',
+  type: 'div',
+  context: { block: 'hero', /* … */ },
+  page: { /* … */ },
+}
+```
+
+### Visibility policy
+
+A view fires once the element crosses a **viewability threshold** and stays there
+for a **dwell** time — the default is **≥ 50% visible for ≥ 1 second**. Crossing the
+threshold arms a timer; if the element drops back below the threshold before the
+timer elapses, the pending view is cancelled, so a quick scroll-past never counts.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `threshold` | `0.5` | Minimum visible fraction (0–1) that counts as seen. Honored to ~0.01 via the observer's notification grid. Avoid exactly `1.0` — intersection ratios rarely reach it; use `0.99` if you mean "fully visible". |
+| `minVisibleMs` | `1000` | Dwell: how long it must stay at/above `threshold` before firing. |
+| `once` | `true` | Fire a single impression then auto-unobserve; `false` re-arms each time the element re-enters the band. |
+
+Set the global default on `configureTracking` via its `view` object, and override
+it per registration with the third `viewAs` argument:
+
+```js
+configureTracking({ onTrack, view: { threshold: 0.6, minVisibleMs: 2000 } });
+viewAs(promo, { id: 'promo|hero' }, { once: false }); // this element repeats
+```
+
+### No leaks
+
+`viewAs` returns a **cleanup** function that unobserves the element and cancels any
+pending dwell — call it when you tear a component down. A fire-once view unobserves
+itself immediately after delivering, so the common case (a block seen once) needs no
+manual cleanup. An element that is registered but *never seen* stays observed until
+you call its cleanup — or, in practice, until the next full-page navigation clears
+the page. The `views` registry itself is a `WeakMap`, so it never keeps an element
+alive on its own.
+
+```js
+const stopViewing = viewAs(panel, { id: 'panel|view' }, { once: false });
+// later, when the panel is removed:
+stopViewing();
+```
+
+### Unified delivery
+
+`view` events fan out through `onTrack` **and** the `eds:track` DOM event exactly
+like clicks, so a consumer handles them by switching on `event`:
+
+```js
+document.addEventListener('eds:track', ({ detail }) => {
+  if (detail.event === 'view') recordImpression(detail);
+  else recordInteraction(detail);
+});
+```
+
+> **⚠️ The `eds:track` view path is not consent-gated either.** Impressions cross
+> the same boundary as clicks: the producer dispatches `eds:track` (and calls
+> `onTrack`) for every `view` **regardless of consent state**. Enforcing consent
+> before an impression is *delivered* is the consumer's / adapter's responsibility,
+> identical to the click path described above.
 
 ## The Adobe reference adapter
 

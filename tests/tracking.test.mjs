@@ -48,7 +48,7 @@ async function loadTracking() {
   return import(`data:text/javascript,${encodeURIComponent(source)}#${Math.random()}`);
 }
 
-test('tracking module exposes only the four-function public API', async () => {
+test('tracking module exposes only the five-function public API', async () => {
   const source = await readFile(new URL('../scripts/tracking.js', import.meta.url), 'utf8');
   const tracking = await loadTracking();
 
@@ -57,6 +57,7 @@ test('tracking module exposes only the four-function public API', async () => {
     'setPageAttributes',
     'track',
     'trackAs',
+    'viewAs',
   ]);
   Object.values(tracking).forEach((value) => assert.equal(typeof value, 'function'));
 
