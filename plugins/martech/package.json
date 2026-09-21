@@ -35,6 +35,6 @@
     "eslint-config-airbnb-base": "15.0.0",
     "eslint-plugin-import": "2.32.0",
     "jsdom": "^30.0.0",
-    "vitest": "^4.0.0"
+    "vitest": "^5.0.0"
   }
 }
